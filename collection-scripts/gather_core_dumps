@@ -6,16 +6,17 @@ mkdir -p "${CORE_DUMP_PATH}"/
 
 function get_dump_off_node {
     local debugPod=""
-    
-    #Get debug pod's name
-    debugPod=$(oc debug --to-namespace="default" node/"$1" -o jsonpath='{.metadata.name}')
 
-    #Start Debug pod force it to stay up until removed in "default" namespace
+    #Start Debug pod in background
     oc debug --to-namespace="default" node/"$1" -- /bin/bash -c 'sleep 300' > /dev/null 2>&1 &
 
-    #Mimic a normal oc call, i.e pause between two successive calls to allow pod to register
+    #Wait for the debug pod to be created and get its name
     sleep 2
-    oc wait -n "default" --for=condition=Ready pod/"$debugPod" --timeout=30s
+    debugPod=$(oc get pods -n "default" -o jsonpath='{.items[?(@.spec.nodeName=="'"$1"'")].metadata.name}' | grep -o '\S*-debug-\S*' | tail -1)
+
+    if [ -n "$debugPod" ]; then
+      oc wait -n "default" --for=condition=Ready pod/"$debugPod" --timeout=30s > /dev/null 2>&1
+    fi
 
     if [ -z "$debugPod" ]
     then
@@ -23,10 +24,10 @@ function get_dump_off_node {
     else
       #Copy Core Dumps out of Nodes suppress Stdout
       echo "Copying core dumps on node ""$1"""
-      oc cp  --loglevel 1 -n "default" "$debugPod":/host/var/lib/systemd/coredump "${CORE_DUMP_PATH}"/"$1"_core_dump > /dev/null 2>&1 && PIDS+=($!)
+      oc cp  --loglevel 1 -n "default" "$debugPod":/host/var/lib/systemd/coredump "${CORE_DUMP_PATH}"/"$1"_core_dump > /dev/null 2>&1
 
-      #clean up debug pod after we are done using them  
-      oc delete pod "$debugPod" -n "default"  
+      #clean up debug pod after we are done using them
+      oc delete pod "$debugPod" -n "default"
     fi
 }
 
@@ -52,3 +53,4 @@ echo "INFO: Node core dump collection to complete."
 
 # force disk flush to ensure that all data gathered is accessible in the copy container
 sync
+
